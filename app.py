@@ -381,7 +381,7 @@ def render_chart(symbol: str, df: pd.DataFrame, session_label: str = ""):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         margin=dict(l=10, r=10, t=60, b=10),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"chart_{symbol}_{session_label}")
 
 
 # ======================================================================
@@ -423,53 +423,73 @@ def main():
         st.error(f"Failed to load NSE instrument master: {exc}")
         st.stop()
 
-    tab_nifty, tab_banknifty, tab_chart = st.tabs(["NIFTY 50", "BANK NIFTY", "Chart"])
+    # ------------------------------------------------------------------
+    # 1) NIFTY 50
+    # ------------------------------------------------------------------
+    render_table_header("NIFTY 50 — Top Weighted Constituents", NIFTY50_TOP10)
+    status_ph = st.empty()
+    progress_ph = st.progress(0)
+    table_ph = st.empty()
+    nifty_df = build_summary_progressive(
+        NIFTY50_TOP10, master, token, interval, table_ph, status_ph, progress_ph
+    )
+    bullish = nifty_df[nifty_df["Signal"] == "BULLISH"]
+    bearish = nifty_df[nifty_df["Signal"] == "BEARISH"]
+    c1, c2 = st.columns(2)
+    c1.metric("Bullish weight %", f"{bullish['Weight %'].sum():.2f}%")
+    c2.metric("Bearish weight %", f"{bearish['Weight %'].sum():.2f}%")
 
-    with tab_nifty:
-        render_table_header("NIFTY 50 — Top Weighted Constituents", NIFTY50_TOP10)
-        status_ph = st.empty()
-        progress_ph = st.progress(0)
-        table_ph = st.empty()
-        nifty_df = build_summary_progressive(
-            NIFTY50_TOP10, master, token, interval, table_ph, status_ph, progress_ph
-        )
-        bullish = nifty_df[nifty_df["Signal"] == "BULLISH"]
-        bearish = nifty_df[nifty_df["Signal"] == "BEARISH"]
-        c1, c2 = st.columns(2)
-        c1.metric("Bullish weight %", f"{bullish['Weight %'].sum():.2f}%")
-        c2.metric("Bearish weight %", f"{bearish['Weight %'].sum():.2f}%")
+    st.divider()
 
-    with tab_banknifty:
-        render_table_header("BANK NIFTY — Top Weighted Constituents", BANKNIFTY_TOP10)
-        status_ph = st.empty()
-        progress_ph = st.progress(0)
-        table_ph = st.empty()
-        bn_df = build_summary_progressive(
-            BANKNIFTY_TOP10, master, token, interval, table_ph, status_ph, progress_ph
-        )
-        bullish = bn_df[bn_df["Signal"] == "BULLISH"]
-        bearish = bn_df[bn_df["Signal"] == "BEARISH"]
-        c1, c2 = st.columns(2)
-        c1.metric("Bullish weight %", f"{bullish['Weight %'].sum():.2f}%")
-        c2.metric("Bearish weight %", f"{bearish['Weight %'].sum():.2f}%")
+    # ------------------------------------------------------------------
+    # 2) BANK NIFTY
+    # ------------------------------------------------------------------
+    render_table_header("BANK NIFTY — Top Weighted Constituents", BANKNIFTY_TOP10)
+    status_ph = st.empty()
+    progress_ph = st.progress(0)
+    table_ph = st.empty()
+    bn_df = build_summary_progressive(
+        BANKNIFTY_TOP10, master, token, interval, table_ph, status_ph, progress_ph
+    )
+    bullish = bn_df[bn_df["Signal"] == "BULLISH"]
+    bearish = bn_df[bn_df["Signal"] == "BEARISH"]
+    c1, c2 = st.columns(2)
+    c1.metric("Bullish weight %", f"{bullish['Weight %'].sum():.2f}%")
+    c2.metric("Bearish weight %", f"{bearish['Weight %'].sum():.2f}%")
 
-    with tab_chart:
-        all_symbols = sorted(set(list(NIFTY50_TOP10.keys()) + list(BANKNIFTY_TOP10.keys())))
-        symbol = st.selectbox("Select stock", all_symbols)
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # 3) CHARTS — every stock, no dropdown
+    # ------------------------------------------------------------------
+    st.subheader("Charts — All Stocks")
+    all_symbols = sorted(set(list(NIFTY50_TOP10.keys()) + list(BANKNIFTY_TOP10.keys())))
+    chart_status_ph = st.empty()
+    chart_progress_ph = st.progress(0)
+    total_charts = len(all_symbols)
+
+    for i, symbol in enumerate(all_symbols, start=1):
+        chart_status_ph.write(f"Charting **{symbol}** ({i}/{total_charts})...")
+        chart_progress_ph.progress(i / total_charts)
+
         inst_key = symbol_to_instrument_key(symbol, master)
         if inst_key is None:
             st.error(f"Instrument key not found for {symbol}.")
-        else:
-            with st.spinner(f"Fetching {symbol}..."):
-                candles, session = get_candles_with_session(inst_key, token, interval)
-            candles = add_indicators(candles)
-            if candles.empty:
-                st.info("No candle data available (market closed and no recent previous-session "
-                        "data found either — try a different interval).")
-            else:
-                badge = "🟢 LIVE" if session == "LIVE" else f"🟡 {session}"
-                st.caption(f"Showing: {badge}")
-                render_chart(symbol, candles, session)
+            continue
+
+        candles, session = get_candles_with_session(inst_key, token, interval)
+        candles = add_indicators(candles)
+        if candles.empty:
+            st.info(f"{symbol}: no candle data available (market closed and no recent "
+                    f"previous-session data found either — try a different interval).")
+            continue
+
+        badge = "🟢 LIVE" if session == "LIVE" else f"🟡 {session}"
+        st.caption(f"{symbol} — Showing: {badge}")
+        render_chart(symbol, candles, session)
+
+    chart_status_ph.empty()
+    chart_progress_ph.empty()
 
     st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
