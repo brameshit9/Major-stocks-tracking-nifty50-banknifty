@@ -40,6 +40,7 @@ SETUP
 import os
 import gzip
 import io
+import json
 from datetime import datetime
 
 import requests
@@ -55,7 +56,7 @@ from plotly.subplots import make_subplots
 st.set_page_config(page_title="Nifty50 / BankNifty EMA8-VWAP Tracker", layout="wide")
 
 UPSTOX_BASE = "https://api.upstox.com/v2"
-INSTRUMENT_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.csv.gz"
+INSTRUMENT_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 
 EMA_SPAN = 8
 DEFAULT_INTERVAL = "1minute"   # Upstox intraday intervals: 1minute / 30minute
@@ -109,15 +110,61 @@ def auth_headers(token: str) -> dict:
 
 # ======================================================================
 # INSTRUMENT MASTER  (maps trading symbol -> Upstox instrument_key)
+#
+# Upstox deprecated the CSV instrument files; the JSON files are now the
+# recommended source. Each record looks like:
+#   {
+#     "segment": "NSE_EQ", "name": "JOCIL LIMITED", "exchange": "NSE",
+#     "isin": "INE839G01010", "instrument_type": "EQ",
+#     "instrument_key": "NSE_EQ|INE839G01010", "lot_size": 1,
+#     "trading_symbol": "JOCIL", "short_name": "JOCIL", ...
+#   }
+# Docs: https://upstox.com/developer/api-documentation/instruments
 # ======================================================================
 @st.cache_data(ttl=24 * 3600, show_spinner="Loading NSE instrument master...")
 def load_instrument_master() -> pd.DataFrame:
-    resp = requests.get(INSTRUMENT_MASTER_URL, timeout=30)
+    resp = requests.get(INSTRUMENT_MASTER_URL, timeout=60)
     resp.raise_for_status()
-    raw = gzip.decompress(resp.content)
-    df = pd.read_csv(io.BytesIO(raw))
-    # Upstox master columns typically include:
-    # instrument_key, exchange, trading_symbol, name, instrument_type, segment ...
+
+    # `requests` sometimes auto-decompresses gzip content already (if the
+    # server sent Content-Encoding: gzip), so only gzip-decompress if the
+    # bytes actually look gzip-compressed (magic number 1f 8b).
+    content = resp.content
+    if content[:2] == b"\x1f\x8b":
+        content = gzip.decompress(content)
+
+    data = None
+    try:
+        data = json.loads(content)
+    except Exception:
+        pass
+
+    if data is None:
+        raise RuntimeError("Could not parse instrument master response as JSON.")
+
+    # The file is normally a flat JSON array of records. Handle the case
+    # where it might instead be wrapped in an object (e.g. {"data": [...]})
+    # just in case Upstox changes the envelope in future.
+    if isinstance(data, dict):
+        for key in ("data", "instruments", "results"):
+            if key in data and isinstance(data[key], list):
+                data = data[key]
+                break
+
+    df = pd.DataFrame(data)
+    if df.empty:
+        return pd.DataFrame(columns=["instrument_key", "trading_symbol"])
+
+    required = {"segment", "instrument_type", "instrument_key", "trading_symbol"}
+    missing = required - set(df.columns)
+    if missing:
+        raise RuntimeError(
+            f"Instrument master is missing expected columns {sorted(missing)}. "
+            f"Columns actually present: {list(df.columns)}. "
+            "Upstox may have changed the file format — check "
+            "https://upstox.com/developer/api-documentation/instruments"
+        )
+
     df = df[(df["instrument_type"] == "EQ") & (df["segment"] == "NSE_EQ")]
     return df[["instrument_key", "trading_symbol"]].drop_duplicates()
 
