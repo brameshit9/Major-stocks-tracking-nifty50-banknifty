@@ -41,7 +41,7 @@ import os
 import gzip
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 import numpy as np
@@ -181,18 +181,70 @@ def symbol_to_instrument_key(symbol: str, master: pd.DataFrame) -> str | None:
 # ======================================================================
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_intraday_candles(instrument_key: str, token: str, interval: str = DEFAULT_INTERVAL) -> pd.DataFrame:
-    """Returns ascending-time OHLCV dataframe for the current session."""
+    """Returns ascending-time OHLCV dataframe for the CURRENT session (today), if any."""
     url = f"{UPSTOX_BASE}/historical-candle/intraday/{instrument_key}/{interval}"
     resp = requests.get(url, headers=auth_headers(token), timeout=15)
     resp.raise_for_status()
     payload = resp.json()
     candles = payload.get("data", {}).get("candles", [])
+    return _candles_to_df(candles)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_historical_candles(instrument_key: str, token: str, interval: str, day_str: str) -> pd.DataFrame:
+    """Returns ascending-time OHLCV dataframe for a single past calendar date."""
+    url = f"{UPSTOX_BASE}/historical-candle/{instrument_key}/{interval}/{day_str}/{day_str}"
+    resp = requests.get(url, headers=auth_headers(token), timeout=15)
+    resp.raise_for_status()
+    payload = resp.json()
+    candles = payload.get("data", {}).get("candles", [])
+    return _candles_to_df(candles)
+
+
+def _candles_to_df(candles: list) -> pd.DataFrame:
     if not candles:
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
     df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df
+
+
+def _previous_calendar_weekday(from_date, days_back: int):
+    """Return `from_date` minus `days_back` weekdays (Mon-Fri), skipping Sat/Sun.
+    This is a simple approximation — it does not know about NSE trading
+    holidays, only weekends."""
+    d = from_date
+    steps = 0
+    while steps < days_back:
+        d = d - timedelta(days=1)
+        if d.weekday() < 5:  # 0=Mon ... 4=Fri
+            steps += 1
+    return d
+
+
+def get_candles_with_session(instrument_key: str, token: str, interval: str, max_days_back: int = 5):
+    """
+    Try today's live intraday candles first. If empty (market closed /
+    no trades yet / holiday), fall back to the most recent previous
+    trading day's candles via the historical-candle endpoint.
+
+    Returns (dataframe, session_label) where session_label is one of:
+      "LIVE", "PREVIOUS SESSION (YYYY-MM-DD)", or "NO DATA"
+    """
+    live = fetch_intraday_candles(instrument_key, token, interval)
+    if not live.empty:
+        return live, "LIVE"
+
+    today = datetime.now().date()
+    for back in range(1, max_days_back + 1):
+        day = _previous_calendar_weekday(today, back)
+        day_str = day.strftime("%Y-%m-%d")
+        hist = fetch_historical_candles(instrument_key, token, interval, day_str)
+        if not hist.empty:
+            return hist, f"PREVIOUS SESSION ({day_str})"
+
+    return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]), "NO DATA"
 
 
 # ======================================================================
@@ -225,33 +277,53 @@ def classify(df: pd.DataFrame) -> dict:
 
 
 # ======================================================================
-# BUILD SUMMARY TABLE FOR AN INDEX
+# BUILD SUMMARY TABLE FOR AN INDEX (fetches + renders one stock at a time)
 # ======================================================================
-def build_summary(weights: dict, master: pd.DataFrame, token: str, interval: str) -> pd.DataFrame:
+def build_summary_progressive(weights: dict, master: pd.DataFrame, token: str,
+                               interval: str, table_placeholder, status_placeholder,
+                               progress_bar) -> pd.DataFrame:
     rows = []
-    for symbol, weight in weights.items():
+    symbols = list(weights.items())
+    total = len(symbols)
+
+    for i, (symbol, weight) in enumerate(symbols, start=1):
+        status_placeholder.write(f"Fetching **{symbol}** ({i}/{total})...")
+        progress_bar.progress(i / total)
+
         inst_key = symbol_to_instrument_key(symbol, master)
         if inst_key is None:
-            rows.append({"Stock": symbol, "Weight %": weight, "Price": None,
-                         "EMA8": None, "VWAP": None, "Signal": "SYMBOL NOT FOUND"})
-            continue
-        try:
-            candles = fetch_intraday_candles(inst_key, token, interval)
-            candles = add_indicators(candles)
-            info = classify(candles)
-        except Exception as exc:  # noqa: BLE001
-            rows.append({"Stock": symbol, "Weight %": weight, "Price": None,
-                         "EMA8": None, "VWAP": None, "Signal": f"ERROR: {exc}"})
-            continue
-        rows.append({
-            "Stock": symbol,
-            "Weight %": weight,
-            "Price": round(info["price"], 2) if info["price"] is not None else None,
-            "EMA8": round(info["ema8"], 2) if info["ema8"] is not None else None,
-            "VWAP": round(info["vwap"], 2) if info["vwap"] is not None else None,
-            "Signal": info["signal"],
-        })
+            rows.append({"Stock": symbol, "Weight %": weight, "Price": None, "EMA8": None,
+                         "VWAP": None, "Session": "-", "Signal": "SYMBOL NOT FOUND"})
+        else:
+            try:
+                candles, session = get_candles_with_session(inst_key, token, interval)
+                candles = add_indicators(candles)
+                info = classify(candles)
+                rows.append({
+                    "Stock": symbol,
+                    "Weight %": weight,
+                    "Price": round(info["price"], 2) if info["price"] is not None else None,
+                    "EMA8": round(info["ema8"], 2) if info["ema8"] is not None else None,
+                    "VWAP": round(info["vwap"], 2) if info["vwap"] is not None else None,
+                    "Session": session,
+                    "Signal": info["signal"],
+                })
+            except Exception as exc:  # noqa: BLE001
+                rows.append({"Stock": symbol, "Weight %": weight, "Price": None, "EMA8": None,
+                             "VWAP": None, "Session": "-", "Signal": f"ERROR: {exc}"})
+
+        # Re-render the table after every stock so results appear one by one.
+        partial = pd.DataFrame(rows).sort_values("Weight %", ascending=False).reset_index(drop=True)
+        table_placeholder.dataframe(
+            partial.style.map(style_signal, subset=["Signal"]),
+            use_container_width=True, hide_index=True,
+        )
+
+    status_placeholder.empty()
+    progress_bar.empty()
     out = pd.DataFrame(rows).sort_values("Weight %", ascending=False).reset_index(drop=True)
+    print(f"\n=== Summary ({total} stocks) ===")
+    print(out.to_string(index=False))
     return out
 
 
@@ -265,22 +337,17 @@ def style_signal(val: str) -> str:
     return "background-color: #eeeeee; color: #555555;"
 
 
-def render_table(title: str, df: pd.DataFrame):
+def render_table_header(title: str, weights: dict):
     st.subheader(title)
-    total_weight = df["Weight %"].sum()
-    st.caption(f"Constituents shown: {len(df)}  |  Combined weight: {total_weight:.2f}%")
-    styled = df.style.map(style_signal, subset=["Signal"])
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-
-    # Console / log-style print output as requested
-    print(f"\n=== {title} ===")
-    print(df.to_string(index=False))
+    total_weight = sum(weights.values())
+    st.caption(f"Constituents to track: {len(weights)}  |  Combined weight: {total_weight:.2f}%")
 
 
 # ======================================================================
 # TRADINGVIEW-STYLE CHART
 # ======================================================================
-def render_chart(symbol: str, df: pd.DataFrame):
+def render_chart(symbol: str, df: pd.DataFrame, session_label: str = ""):
+    title_suffix = f" — {session_label}" if session_label else ""
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
         row_heights=[0.75, 0.25], vertical_spacing=0.03,
@@ -308,7 +375,7 @@ def render_chart(symbol: str, df: pd.DataFrame):
     ), row=2, col=1)
 
     fig.update_layout(
-        title=f"{symbol} — Price / EMA8 / VWAP",
+        title=f"{symbol} — Price / EMA8 / VWAP{title_suffix}",
         xaxis_rangeslider_visible=False,
         height=650,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
@@ -359,8 +426,13 @@ def main():
     tab_nifty, tab_banknifty, tab_chart = st.tabs(["NIFTY 50", "BANK NIFTY", "Chart"])
 
     with tab_nifty:
-        nifty_df = build_summary(NIFTY50_TOP10, master, token, interval)
-        render_table("NIFTY 50 — Top Weighted Constituents", nifty_df)
+        render_table_header("NIFTY 50 — Top Weighted Constituents", NIFTY50_TOP10)
+        status_ph = st.empty()
+        progress_ph = st.progress(0)
+        table_ph = st.empty()
+        nifty_df = build_summary_progressive(
+            NIFTY50_TOP10, master, token, interval, table_ph, status_ph, progress_ph
+        )
         bullish = nifty_df[nifty_df["Signal"] == "BULLISH"]
         bearish = nifty_df[nifty_df["Signal"] == "BEARISH"]
         c1, c2 = st.columns(2)
@@ -368,8 +440,13 @@ def main():
         c2.metric("Bearish weight %", f"{bearish['Weight %'].sum():.2f}%")
 
     with tab_banknifty:
-        bn_df = build_summary(BANKNIFTY_TOP10, master, token, interval)
-        render_table("BANK NIFTY — Top Weighted Constituents", bn_df)
+        render_table_header("BANK NIFTY — Top Weighted Constituents", BANKNIFTY_TOP10)
+        status_ph = st.empty()
+        progress_ph = st.progress(0)
+        table_ph = st.empty()
+        bn_df = build_summary_progressive(
+            BANKNIFTY_TOP10, master, token, interval, table_ph, status_ph, progress_ph
+        )
         bullish = bn_df[bn_df["Signal"] == "BULLISH"]
         bearish = bn_df[bn_df["Signal"] == "BEARISH"]
         c1, c2 = st.columns(2)
@@ -383,12 +460,16 @@ def main():
         if inst_key is None:
             st.error(f"Instrument key not found for {symbol}.")
         else:
-            candles = fetch_intraday_candles(inst_key, token, interval)
+            with st.spinner(f"Fetching {symbol}..."):
+                candles, session = get_candles_with_session(inst_key, token, interval)
             candles = add_indicators(candles)
             if candles.empty:
-                st.info("No candle data returned (market may be closed or symbol has no trades yet today).")
+                st.info("No candle data available (market closed and no recent previous-session "
+                        "data found either — try a different interval).")
             else:
-                render_chart(symbol, candles)
+                badge = "🟢 LIVE" if session == "LIVE" else f"🟡 {session}"
+                st.caption(f"Showing: {badge}")
+                render_chart(symbol, candles, session)
 
     st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
