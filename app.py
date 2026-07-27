@@ -50,6 +50,12 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
+
 # ======================================================================
 # CONFIG
 # ======================================================================
@@ -59,7 +65,7 @@ UPSTOX_BASE = "https://api.upstox.com/v2"
 INSTRUMENT_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 
 EMA_SPAN = 8
-DEFAULT_INTERVAL = "1minute"   # Upstox intraday intervals: 1minute / 30minute
+DEFAULT_INTERVAL = "1minute"   # fixed candle timeframe — no longer user-selectable
 
 # --- User-supplied index composition (top weighted constituents) -----
 NIFTY50_TOP10 = {
@@ -418,7 +424,24 @@ def main():
         if token_input:
             st.session_state["access_token_override"] = token_input
 
-        interval = st.selectbox("Candle interval", ["1minute", "30minute"], index=0)
+        interval = DEFAULT_INTERVAL  # fixed at 1minute — not user-selectable
+        st.caption(f"Candle timeframe: **{interval}** (fixed)")
+
+        refresh_choice = st.selectbox(
+            "Auto-refresh every",
+            ["Off", "1 min", "2 min", "3 min", "4 min", "5 min"],
+            index=0,
+            help="Automatically re-fetches and re-renders the whole page on this interval.",
+        )
+        if refresh_choice != "Off":
+            minutes = int(refresh_choice.split()[0])
+            if HAS_AUTOREFRESH:
+                st_autorefresh(interval=minutes * 60 * 1000, key="auto_refresh_timer")
+            else:
+                st.warning(
+                    "Auto-refresh needs the `streamlit-autorefresh` package "
+                    "(add it to requirements.txt and redeploy)."
+                )
 
         if st.button("🔄 Refresh data now"):
             st.cache_data.clear()
