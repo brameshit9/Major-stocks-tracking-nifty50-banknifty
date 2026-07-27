@@ -315,7 +315,7 @@ def build_summary_progressive(weights: dict, master: pd.DataFrame, token: str,
         # Re-render the table after every stock so results appear one by one.
         partial = pd.DataFrame(rows).sort_values("Weight %", ascending=False).reset_index(drop=True)
         table_placeholder.dataframe(
-            partial.style.map(style_signal, subset=["Signal"]),
+            style_table(partial),
             use_container_width=True, hide_index=True,
         )
 
@@ -335,6 +335,22 @@ def style_signal(val: str) -> str:
     if val == "NEUTRAL":
         return "background-color: #fff6d5; color: #806000; font-weight: 600;"
     return "background-color: #eeeeee; color: #555555;"
+
+
+def _fmt2(val) -> str:
+    """Format a number to exactly 2 decimals; pass through non-numeric / missing values."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return "-"
+    try:
+        return f"{float(val):.2f}"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+def style_table(df: pd.DataFrame):
+    numeric_cols = [c for c in ["Weight %", "Price", "EMA8", "VWAP"] if c in df.columns]
+    fmt = {c: _fmt2 for c in numeric_cols}
+    return df.style.format(fmt).map(style_signal, subset=["Signal"])
 
 
 def render_table_header(title: str, weights: dict):
