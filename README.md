@@ -96,15 +96,30 @@ Streamlit secrets only.
 
 ## Notes / limitations
 
+- **Live vs. previous session:** the app first tries today's live intraday
+  candles for each stock. If the market is closed or no trades have printed
+  yet today, it automatically falls back to the most recent previous
+  trading day's candles (via Upstox's historical-candle endpoint) and
+  labels that stock's row/chart as `PREVIOUS SESSION (YYYY-MM-DD)` instead
+  of `LIVE`, so you always see the last available EMA8/VWAP read even when
+  the exchange is shut. The previous-day lookup skips weekends but does
+  **not** know NSE holidays, so on a holiday it tries up to 5 prior
+  weekdays until it finds data.
+- **One-by-one loading:** each table fills in row-by-row as every stock is
+  fetched (with a progress bar), rather than blocking until all 10 stocks
+  finish, so you can see results arrive live.
 - The Upstox intraday candle endpoint only returns data for the **current
-  trading session** — outside market hours you'll see the last session's
-  candles or an empty response depending on the API's current behaviour.
+  trading session** — outside market hours you'll see the previous-session
+  fallback kick in as described above.
 - EMA(8) and VWAP are both computed from 1-minute (or 30-minute, if you
   switch the interval dropdown) intraday candles, reset each session —
   this matches how VWAP is conventionally defined (cumulative from the
   session open).
 - The NSE instrument master (symbol → Upstox `instrument_key` mapping) is
-  downloaded once per day and cached; if a symbol changes trading name on
-  the exchange, update the ticker in `NIFTY50_TOP10` / `BANKNIFTY_TOP10`.
-- Upstox API rate limits apply — the app caches each stock's candle data
-  for 60 seconds to stay well within normal limits.
+  downloaded once per day from Upstox's `NSE.json.gz` file (their CSV
+  instrument files are deprecated) and cached; if a symbol changes trading
+  name on the exchange, update the ticker in `NIFTY50_TOP10` /
+  `BANKNIFTY_TOP10`.
+- Upstox API rate limits apply — the app caches each stock's intraday
+  candle data for 60 seconds and previous-session data for 5 minutes to
+  stay well within normal limits.
