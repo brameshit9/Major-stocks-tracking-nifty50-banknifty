@@ -101,17 +101,21 @@ NIFTY50_TOP10 = {
     }  # ~82% of NIFTY50 weight
 
 BANKNIFTY_TOP10 = {
-    "HDFCBANK":    19.30,
-    "ICICIBANK":   14.16,
-    "SBIN":        10.02,
-    "AXISBANK":     9.59,
-    "KOTAKBANK":    9.31,
-    "FEDERALBNK":   6.67,
-    "INDUSINDBK":   4.99,
-    "AUBANK":       4.64,
-    "IDFCFIRSTB":   4.36,
-    "BANKBARODA":   4.00,
-}  # ~87.04% of BANKNIFTY weight
+    "HDFCBANK":    18.2,
+    "ICICIBANK":   14.86,
+    "SBIN":        10.09,
+    "KOTAKBANK":    9.32,
+    "AXISBANK":     8.81,
+    "FEDERALBNK":   7.29,
+    "INDUSINDBK":   5.5,
+    "AUBANK":       4.71,
+    "IDFCFIRSTB":   4.67,
+    "BANKBARODA":   3.58,
+    "PNB":          3.37,
+    "YESBANK":      3.37,
+    "CANBK":        3.32,
+    "UNIONBANK":    2.91, 
+    }  # ~87.04% of BANKNIFTY weight
 
 
 # ======================================================================
