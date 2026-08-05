@@ -115,7 +115,7 @@ BANKNIFTY_TOP10 = {
     "YESBANK":      3.37,
     "CANBK":        3.32,
     "UNIONBANK":    2.91, 
-    }  # ~87.04% of BANKNIFTY weight
+    }  # ~100% of BANKNIFTY weight
 
 
 # ======================================================================
