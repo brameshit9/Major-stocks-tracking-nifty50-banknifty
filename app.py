@@ -79,7 +79,16 @@ NIFTY50_TOP10 = {
     "INFY":        3.21,
     "KOTAKBANK":   2.64,
     "ITC":         2.53,
-}  # ~53% of NIFTY50 weight
+    "ASIANPAINT":  1.32,
+    "TITAN":       1.32,
+    "NTPC":        1.32,
+    "POWERGRID":   1.32,
+    "ADANIPORTS":  1.15,
+    "INDIGO":      1.15,
+    "ETERNAL":     1.15,
+    "TRENT":       1.15,
+    "BEL":         1.35,
+  }  # ~66% of NIFTY50 weight
 
 BANKNIFTY_TOP10 = {
     "HDFCBANK":    19.30,
