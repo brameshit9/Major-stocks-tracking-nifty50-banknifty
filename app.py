@@ -93,7 +93,7 @@ NIFTY50_TOP10 = {
     "ULTRACEMCO":  1.26,
      "BEL":        1.24,
     "POWERGRID":   1.15,
-    "BAJAJ-AUTO"   1.14,
+    "BAJAJ-AUTO":   1.14,
     "ADANIPORTS":  1.12,
     "ASIANPAINT":  1.11,
     "INDIGO":      1.05,
